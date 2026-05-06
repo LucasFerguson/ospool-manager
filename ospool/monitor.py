@@ -8,6 +8,8 @@ Two monitoring modes:
                  a local file; follow_log() bridges that by fetching the log
                  over SSH into a local temp file and tailing it with JobEventLog.
 """
+from __future__ import annotations
+from typing import Optional
 import subprocess
 import time
 from pathlib import Path
@@ -95,7 +97,7 @@ def _build_table(jobs: list) -> Table:
     return table
 
 
-def watch(cfg: Config, cluster_id: int | None = None, interval: int = 5) -> None:
+def watch(cfg: Config, cluster_id: Optional[int] = None, interval: int = 5) -> None:
     """
     Live-polling job status table. Refreshes every `interval` seconds.
     Ctrl-C to stop. Exits automatically when no jobs remain.
@@ -134,7 +136,7 @@ _IDLE = 1
 _RUNNING = 2
 
 
-def _query_job(cfg: Config, cluster_id: int) -> dict | None:
+def _query_job(cfg: Config, cluster_id: int) -> Optional[dict]:
     """Return the first proc of a cluster as a plain dict, or None if not found."""
     schedd = _schedd(cfg)
     constraint = f'Owner == "{cfg.remote.username}" && ClusterId == {cluster_id}'
@@ -173,7 +175,7 @@ def _print_job_info(j: dict) -> None:
 def follow_log(
     cfg: Config,
     cluster_id: int,
-    prefix: str | None = None,
+    prefix: Optional[str] = None,
     poll_interval: int = 10,
 ) -> None:
     """

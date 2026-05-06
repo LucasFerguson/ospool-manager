@@ -10,6 +10,7 @@ Run in the background with:
   ospool watch &
   nohup ospool watch > runs/watch.log 2>&1 &
 """
+from __future__ import annotations
 import time
 from datetime import datetime
 

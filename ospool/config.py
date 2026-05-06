@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Optional
 
 try:
     import tomllib  # Python 3.11+
@@ -46,7 +48,7 @@ class Config:
     submit: SubmitConfig
 
 
-def load(config_path: Path | None = None) -> Config:
+def load(config_path: Optional[Path] = None) -> Config:
     path = config_path or Path(__file__).parent.parent / "config.toml"
     with open(path, "rb") as f:
         raw = tomllib.load(f)

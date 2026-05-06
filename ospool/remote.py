@@ -6,6 +6,7 @@ sync_remote()   — rsync the local project to AP, excluding runtime artifacts.
 is_on_ap()      — True when running directly on the Access Point.
 whereami()      — Print a summary of the current execution environment.
 """
+from __future__ import annotations
 import socket
 import subprocess
 from pathlib import Path

@@ -5,3 +5,4 @@ execution/job-scripts/*.tar.gz
 execution/job-scripts/analysis
 outputs/*
 runs/*
+logs/*

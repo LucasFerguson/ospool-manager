@@ -12,11 +12,12 @@ Status values: submitted → running → done → fetched
                                    → failed
                                    → held
 """
+from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Generator
+from typing import Optional, Generator
 
 from .config import Config
 
@@ -77,7 +78,7 @@ def update_status(cfg: Config, cluster_id: int, status: str, fetched: bool = Fal
         conn.commit()
 
 
-def load(cfg: Config, cluster_id: int) -> dict | None:
+def load(cfg: Config, cluster_id: int) -> Optional[dict]:
     """Return a single run record as a dict, or None if not found."""
     with _connect(cfg) as conn:
         row = conn.execute(
@@ -86,12 +87,22 @@ def load(cfg: Config, cluster_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-def list_runs(cfg: Config) -> list[dict]:
-    """Return all runs ordered by submission time descending."""
+def list_runs(cfg: Config, days: Optional[int] = 30) -> list[dict]:
+    """
+    Return runs ordered by submission time descending.
+    Pass days=None to return everything.
+    """
     with _connect(cfg) as conn:
-        rows = conn.execute(
-            "SELECT * FROM runs ORDER BY submitted_at DESC"
-        ).fetchall()
+        if days is None:
+            rows = conn.execute(
+                "SELECT * FROM runs ORDER BY submitted_at DESC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM runs WHERE submitted_at >= datetime('now', ?) "
+                "ORDER BY submitted_at DESC",
+                (f"-{days} days",),
+            ).fetchall()
     return [dict(r) for r in rows]
 
 

@@ -15,6 +15,7 @@ Two submit modes (set in config.toml [submit] mode):
 References:
   https://htcondor.readthedocs.io/en/latest/apis/python-bindings/
 """
+from __future__ import annotations
 import subprocess
 from pathlib import Path
 

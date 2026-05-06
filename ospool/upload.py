@@ -6,6 +6,8 @@ Files land at /ospool/ap40/data/<username>/ and are accessible in jobs as:
 
 Prefers rsync; falls back to scp if rsync is not installed.
 """
+from __future__ import annotations
+from typing import Optional
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,7 +24,7 @@ def _has_rsync() -> bool:
     return shutil.which("rsync") is not None
 
 
-def upload(cfg: Config, source: Path | None = None) -> str:
+def upload(cfg: Config, source: Optional[Path] = None) -> str:
     """
     Upload a file or directory to OSDF.
 

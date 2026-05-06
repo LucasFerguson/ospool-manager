@@ -8,6 +8,8 @@ via SSH on the AP at /ospool/ap40/data/<user>/outputs/.
 fetch_outputs() rsyncs files matching the cluster ID from that path
 back to local outputs/<cluster_id>/.
 """
+from __future__ import annotations
+from typing import Optional
 import subprocess
 from pathlib import Path
 
@@ -23,7 +25,7 @@ def _osdf_ssh_path(cfg: Config) -> str:
     return cfg.osdf.base_path.replace("osdf://", "")
 
 
-def fetch_outputs(cfg: Config, cluster_id: int, dest: Path | None = None) -> Path:
+def fetch_outputs(cfg: Config, cluster_id: int, dest: Optional[Path] = None) -> Path:
     """
     Rsync output files for a completed job from OSDF to local outputs/<cluster_id>/.
 
@@ -76,10 +78,45 @@ def fetch_outputs(cfg: Config, cluster_id: int, dest: Path | None = None) -> Pat
         size = f.stat().st_size
         print(f"  {f.name}  ({size / 1024:.1f} KB)")
 
+    # Also sync matching log files from AP logs/ → local logs/
+    _sync_logs_for_cluster(cfg, cluster_id, ssh_target, ssh_opts)
+
     return dest
 
 
-def fetch_all(cfg: Config, dest: Path | None = None) -> Path:
+def _sync_logs_for_cluster(
+    cfg: Config, cluster_id: int, ssh_target: str, ssh_opts: list[str]
+) -> None:
+    """Rsync log files matching the cluster ID from AP logs/ to local logs/."""
+    remote_logs = f"{cfg.remote.project_dir}/logs"
+    local_logs = cfg.local.logs_dir.resolve()
+    local_logs.mkdir(parents=True, exist_ok=True)
+
+    find_result = subprocess.run(
+        ["ssh", *ssh_opts, ssh_target,
+         f"ls {remote_logs}/*{cluster_id}* 2>/dev/null || true"],
+        capture_output=True, text=True,
+    )
+    log_files = [f for f in find_result.stdout.strip().splitlines() if f]
+
+    if not log_files:
+        return
+
+    print(f"\nSyncing {len(log_files)} log file(s) to {local_logs}/:")
+    for remote_file in log_files:
+        subprocess.run(
+            [
+                "rsync", "-az",
+                "-e", " ".join(["ssh"] + ssh_opts),
+                f"{ssh_target}:{remote_file}",
+                str(local_logs) + "/",
+            ],
+            check=True,
+        )
+        print(f"  {Path(remote_file).name}")
+
+
+def fetch_all(cfg: Config, dest: Optional[Path] = None) -> Path:
     """
     Rsync everything in the OSDF outputs/ directory to local outputs/.
     Returns the local destination path.
@@ -111,5 +148,20 @@ def fetch_all(cfg: Config, dest: Path | None = None) -> Path:
     for f in sorted(local_files):
         size = f.stat().st_size
         print(f"  {f.name}  ({size / 1024:.1f} KB)")
+
+    # Also sync all logs from AP logs/ → local logs/
+    remote_logs = f"{cfg.remote.project_dir}/logs"
+    local_logs = cfg.local.logs_dir.resolve()
+    local_logs.mkdir(parents=True, exist_ok=True)
+    print(f"\nSyncing logs from {cfg.remote.access_point}:{remote_logs}/ → {local_logs}/")
+    subprocess.run(
+        [
+            "rsync", "-az", "--info=progress2",
+            "-e", " ".join(["ssh"] + ssh_opts),
+            f"{ssh_target}:{remote_logs}/",
+            str(local_logs) + "/",
+        ],
+        check=True,
+    )
 
     return dest

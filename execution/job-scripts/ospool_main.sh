@@ -23,6 +23,8 @@ fi
 # Alpine Linux (netshoot) uses PEP 668 — system pip is blocked.
 # We create a job-local venv so installs are isolated and reliable.
 VENV="${JOB_DIR}/venv"
+# Suppress SyntaxWarning spam from auto-generated dissectable.py (regex escape sequences)
+export PYTHONWARNINGS="ignore::SyntaxWarning"
 echo "=== creating venv ==="
 python3 -m venv "${VENV}"
 echo "=== pip install matplotlib numpy ==="
