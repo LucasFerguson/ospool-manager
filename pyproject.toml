@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ospool-manager"
+version = "0.1.0"
+description = "CLI for managing OSPool/HTCondor workflows from a local machine"
+requires-python = ">=3.9"
+dependencies = [
+    "typer[all]>=0.12",
+    # htcondor2 is the v2 Python bindings — no local daemon needed.
+    # Token auth via ~/.condor/tokens.d/ + ~/.condor/user_config for remote submit.
+    # See: https://htcondor.readthedocs.io/en/latest/apis/python-bindings/
+    "htcondor",
+    "tomli>=2.0.1; python_version < '3.11'",
+]
+
+[project.scripts]
+ospool = "ospool.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ospool"]

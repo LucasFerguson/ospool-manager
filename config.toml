@@ -1,0 +1,21 @@
+[remote]
+username       = "lucas.ferguson"
+access_point   = "ap40.uw.osg-htc.org"
+schedd_host    = "ap40.uw.osg-htc.org"
+collector_host = "cm-1.ospool.osg-htc.org"
+project_dir    = "/home/lucas.ferguson/ospool-manager"
+ssh_key        = "/home/lucas/code2025/learning-htcondor-ospool/sshkey/ospool_ed25519"
+
+[osdf]
+base_path = "osdf:///ospool/ap40/data/lucas.ferguson"
+
+[local]
+project_dir   = "."
+execution_dir = "execution"
+data_dir      = "data"
+logs_dir      = "logs"
+outputs_dir   = "outputs"
+runs_dir      = "runs"
+
+[submit]
+mode = "spool"
