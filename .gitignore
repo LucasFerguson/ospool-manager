@@ -1,3 +1,7 @@
 .venv
 
 ospool/__pycache__
+
+execution/job-scripts/*.tar.gz
+
+execution/job-scripts/analysis
