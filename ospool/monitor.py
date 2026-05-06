@@ -123,16 +123,63 @@ def watch(cfg: Config, cluster_id: int | None = None, interval: int = 5) -> None
             time.sleep(interval)
 
 
+_DETAIL_PROJECTION = [
+    "ClusterId", "ProcId", "JobStatus", "Cmd", "Owner",
+    "HoldReason", "EnteredCurrentStatus", "RemoteHost",
+    "JobStartDate", "QDate", "RequestCpus", "RequestMemory", "RequestDisk",
+    "NumJobStarts", "NumShadowStarts",
+]
+
+_IDLE = 1
+_RUNNING = 2
+
+
+def _query_job(cfg: Config, cluster_id: int) -> dict | None:
+    """Return the first proc of a cluster as a plain dict, or None if not found."""
+    schedd = _schedd(cfg)
+    constraint = f'Owner == "{cfg.remote.username}" && ClusterId == {cluster_id}'
+    jobs = schedd.query(constraint=constraint, projection=_DETAIL_PROJECTION)
+    return dict(jobs[0]) if jobs else None
+
+
+def _print_job_info(j: dict) -> None:
+    """Print a rich summary panel for a single job."""
+    status_id = int(j.get("JobStatus", 0))
+    label     = _STATUS_LABEL.get(status_id, str(status_id))
+    style     = _STATUS_STYLE.get(status_id, "")
+    cmd       = Path(str(j.get("Cmd", "?"))).name
+    entered   = j.get("EnteredCurrentStatus")
+    elapsed   = _elapsed(int(entered)) if entered else "?"
+    qdate     = j.get("QDate")
+    queued_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(qdate))) if qdate else "?"
+    host      = str(j.get("RemoteHost", "—") or "—")
+    cpus      = str(j.get("RequestCpus", "?"))
+    mem       = str(j.get("RequestMemory", "?"))
+    disk      = str(j.get("RequestDisk", "?"))
+    starts    = str(j.get("NumJobStarts", 0))
+    hold      = str(j.get("HoldReason", "") or "")
+
+    console.print(f"  Cluster       : [bold]{int(j.get('ClusterId', 0))}.{int(j.get('ProcId', 0))}[/bold]")
+    console.print(f"  Executable    : {cmd}")
+    console.print(f"  Status        : [{style}]{label}[/{style}]  ({elapsed} in state)")
+    console.print(f"  Queued at     : {queued_at}")
+    console.print(f"  Execute host  : {host}")
+    console.print(f"  Resources     : {cpus} CPU  {mem} MB RAM  {disk} KB disk")
+    console.print(f"  Job starts    : {starts}")
+    if hold:
+        console.print(f"  Hold reason   : [bold red]{hold}[/bold red]")
+
+
 def follow_log(
     cfg: Config,
     cluster_id: int,
     prefix: str | None = None,
+    poll_interval: int = 10,
 ) -> None:
     """
-    Tail a job's .out and .err files live from the AP over SSH.
+    Show job info, wait for the job to leave Idle, then tail .out/.err over SSH.
 
-    Without --prefix, finds any .out/.err files containing the cluster ID
-    in the logs/ directory automatically.
+    Automatically finds log files by cluster ID — no prefix needed.
     Ctrl-C to stop.
     """
     ssh_target = f"{cfg.remote.username}@{cfg.remote.access_point}"
@@ -140,8 +187,46 @@ def follow_log(
     proj = cfg.remote.project_dir
     logs_dir = f"{proj}/logs"
 
+    # --- Job info header ---
+    console.print("")
+    j = _query_job(cfg, cluster_id)
+    if j is None:
+        console.print(f"[yellow]Cluster {cluster_id} not found in queue (may have already completed).[/yellow]")
+    else:
+        _print_job_info(j)
+        status_id = int(j.get("JobStatus", 0))
+
+        # --- Wait out Idle ---
+        if status_id == _IDLE:
+            console.print(f"\n[yellow]Job is Idle — waiting for it to start before tailing logs ...[/yellow]")
+            try:
+                while True:
+                    time.sleep(poll_interval)
+                    j = _query_job(cfg, cluster_id)
+                    if j is None:
+                        console.print("[dim]Job left the queue.[/dim]")
+                        return
+                    status_id = int(j.get("JobStatus", 0))
+                    label = _STATUS_LABEL.get(status_id, str(status_id))
+                    style = _STATUS_STYLE.get(status_id, "")
+                    entered = j.get("EnteredCurrentStatus")
+                    elapsed = _elapsed(int(entered)) if entered else "?"
+                    console.print(f"  [{style}]{label}[/{style}]  {elapsed} in state ...")
+                    if status_id != _IDLE:
+                        break
+            except KeyboardInterrupt:
+                console.print("[dim]Stopped.[/dim]")
+                return
+
+        console.print("")
+        # Re-print updated info now that it's running
+        if status_id != _IDLE:
+            _print_job_info(j)
+
+    # --- Tail logs ---
+    console.print(f"\n[dim]Tailing *{cluster_id}*.out/.err in {logs_dir}/ — Ctrl-C to stop[/dim]\n")
+
     if prefix is not None:
-        # Explicit prefix: try both dot and underscore separators
         candidates = [
             f"{logs_dir}/{prefix}.{cluster_id}",
             f"{logs_dir}/{prefix}_{cluster_id}",
@@ -154,9 +239,7 @@ def follow_log(
             f"({find_and_tail})"
             f" || echo 'ERROR: no log files found for prefix {prefix!r} in {logs_dir}/'"
         )
-        console.print(f"[dim]Tailing {prefix}[./_]{cluster_id}.out/.err in {logs_dir}/ — Ctrl-C to stop[/dim]")
     else:
-        # No prefix: find any .out file whose name contains the cluster ID
         full_cmd = (
             f"files=$(ls {logs_dir}/*{cluster_id}*.out {logs_dir}/*{cluster_id}*.err 2>/dev/null);"
             f" if [ -z \"$files\" ]; then"
@@ -166,12 +249,13 @@ def follow_log(
             f"   tail -f $files 2>&1;"
             f" fi"
         )
-        console.print(f"[dim]Looking for *{cluster_id}*.out/.err in {logs_dir}/ — Ctrl-C to stop[/dim]")
 
-    cmd = ["ssh", *ssh_opts, ssh_target, full_cmd]
     proc = None
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(
+            ["ssh", *ssh_opts, ssh_target, full_cmd],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
         assert proc.stdout is not None
         for line in proc.stdout:
             console.print(line, end="")

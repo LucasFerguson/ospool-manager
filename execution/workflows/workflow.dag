@@ -1,0 +1,6 @@
+JOB A step1.sub
+JOB B step2.sub
+JOB C step3.sub
+
+PARENT A CHILD B
+PARENT B CHILD C

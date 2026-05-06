@@ -1,0 +1,29 @@
+universe = container
+container_image = docker://nicolaka/netshoot:v0.15
+executable = execution/job-scripts/ospool_main.sh
+
+log    = /home/lucas.ferguson/ospool-manager/logs/patchwork.$(ClusterId).log
+output = /home/lucas.ferguson/ospool-manager/logs/patchwork.$(ClusterId).out
+error  = /home/lucas.ferguson/ospool-manager/logs/patchwork.$(ClusterId).err
+
+stream_output = true
+stream_error  = true
+want_io_proxy  = true
+
+request_cpus   = 1
+request_memory = 3 GB
+request_disk   = 40 GB
+
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+
+OSDF_BASE = osdf:///ospool/ap40/data/lucas.ferguson
+transfer_input_files  = $(OSDF_BASE)/pcaps/2026-04-28/10_15_2025_19_22_15-1.pcap, \
+                        execution/job-scripts/analysis.tar.gz, \
+                        execution/job-scripts/ospool_main.sh
+
+OSDF_BASE = osdf:///ospool/ap40/data/lucas.ferguson
+transfer_output_files = patchwork_results.tar.gz
+transfer_output_remaps = "patchwork_results.tar.gz=$(OSDF_BASE)/outputs/patchwork_results_$(ClusterId).tar.gz"
+
+queue 1
