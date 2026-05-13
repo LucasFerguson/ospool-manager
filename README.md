@@ -89,6 +89,54 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+#### Set up SSH key for the Access Point
+
+OSPool uses SSH key auth for all `ospool sync`, `ospool fetch`, `ospool logs`, etc.
+
+**1. Generate a dedicated key (recommended — keeps OSPool separate from other keys)**
+
+```bash
+mkdir -p ~/.ssh
+ssh-keygen -t ed25519 -f ~/.ssh/ospool_ed25519 -C "ospool"
+```
+
+This creates two files:
+- `~/.ssh/ospool_ed25519` — private key (never share this)
+- `~/.ssh/ospool_ed25519.pub` — public key (upload this to the portal)
+
+**2. Upload the public key to the OSPool portal**
+
+1. Go to [https://portal.osg-htc.org](https://portal.osg-htc.org) and sign in with your institution account
+2. Click your name → **My Profile (OSG)**
+3. Click **Authenticators** → **Manage**
+4. Click **Add SSH Key** and upload `~/.ssh/ospool_ed25519.pub`
+
+**3. Test the connection**
+
+```bash
+ssh -i ~/.ssh/ospool_ed25519 your-username@ap40.uw.osg-htc.org
+```
+
+**4. Add to `config.toml`**
+
+```toml
+[remote]
+ssh_key = "~/.ssh/ospool_ed25519"
+```
+
+Or leave `ssh_key` out entirely to use `ssh-agent` or `~/.ssh/id_*` defaults.
+
+**Optional: add to `~/.ssh/config` for convenience**
+
+```
+Host ospool-ap
+    HostName ap40.uw.osg-htc.org
+    User your-username
+    IdentityFile ~/.ssh/ospool_ed25519
+```
+
+Then `ssh ospool-ap` connects without any flags.
+
 #### Get access token
 ```
 mkdir -p ~/.condor/tokens.d

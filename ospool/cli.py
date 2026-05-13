@@ -2,7 +2,11 @@ from __future__ import annotations
 import os
 import typer
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Optional
+try:
+    from typing import Annotated
+except ImportError:
+    from typing_extensions import Annotated  # Python 3.8
 from datetime import datetime, timezone
 
 from . import config as cfg_module
