@@ -43,7 +43,7 @@ _STATUS_STYLE = {
 
 _PROJECTION = [
     "ClusterId", "ProcId", "JobStatus", "Cmd",
-    "HoldReason", "EnteredCurrentStatus", "QDate",
+    "HoldReason", "EnteredCurrentStatus", "QDate", "TransferInput",
 ]
 
 console = Console()
@@ -69,12 +69,37 @@ def _schedd(cfg: Config) -> htcondor.Schedd:
     return htcondor.Schedd(ad)
 
 
+# Job infrastructure files — excluded from the Input Data column regardless of path.
+# In spool mode HTCondor rewrites TransferInput to spool dir paths, so we can't
+# filter by "data/" in the path; we filter by filename instead.
+_INPUT_EXCLUDES = {"analysis.tar.gz", "ospool_main.sh"}
+
+
+def _data_inputs(transfer_input: str) -> str:
+    """
+    Return the data files from a comma-separated TransferInput string,
+    excluding known job-infrastructure files (analysis.tar.gz, *.sh).
+    Works for both spool mode (paths rewritten to spool dir) and ap-project mode.
+    Returns bare filenames only, newline-separated.
+    """
+    if not transfer_input:
+        return ""
+    entries = [e.strip() for e in transfer_input.split(",") if e.strip()]
+    data_files = [
+        Path(e).name
+        for e in entries
+        if Path(e).name not in _INPUT_EXCLUDES and not Path(e).name.endswith(".sh")
+    ]
+    return "\n".join(data_files)
+
+
 def _build_table(jobs: list) -> Table:
     table = Table(title="OSPool Jobs", expand=True)
     table.add_column("Cluster", style="bold")
     table.add_column("Proc")
     table.add_column("Status")
     table.add_column("Time in State")
+    table.add_column("Input Data")
     table.add_column("Executable")
     table.add_column("Hold Reason")
 
@@ -88,11 +113,14 @@ def _build_table(jobs: list) -> Table:
         hold = str(j.get("HoldReason", "") or "")
         entered = j.get("EnteredCurrentStatus", None)
         elapsed = _elapsed(int(entered)) if entered is not None else "?"
+        transfer_input = str(j.get("TransferInput", "") or "")
+        input_data = _data_inputs(transfer_input)
         table.add_row(
             str(int(j.get("ClusterId", 0))),
             str(int(j.get("ProcId", 0))),
             f"[{style}]{label}[/{style}]",
             elapsed,
+            input_data,
             cmd,
             hold,
         )
