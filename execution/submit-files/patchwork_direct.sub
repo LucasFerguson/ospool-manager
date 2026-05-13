@@ -30,7 +30,7 @@ when_to_transfer_output = ON_EXIT
 # ap-project mode (after ospool sync remote --data): same relative paths
 #   resolve against initialdir = /home/lucas.ferguson/ospool-manager.
 #
-transfer_input_files  = data/INDI.tar.gz, \
+transfer_input_files  = data/MAX.tar.gz, \
                         execution/job-scripts/analysis.tar.gz, \
                         execution/job-scripts/ospool_main.sh
 

@@ -190,6 +190,16 @@ def monitor(
     monitor_mod.watch(c, cluster_id, interval)
 
 
+@app.command(rich_help_panel="Jobs")
+def report(
+    cluster_id: Annotated[int, typer.Argument(help="Cluster ID to report on.")],
+    config: Annotated[Optional[Path], typer.Option("--config", "-c")] = None,
+) -> None:
+    """Show a metadata report for a job: timing, duration, resources."""
+    c = _cfg(config)
+    monitor_mod.report_job(c, cluster_id)
+
+
 @app.command("logs", rich_help_panel="Jobs")
 def follow_logs(
     cluster_id: Annotated[int, typer.Argument(help="Cluster ID to follow.")],

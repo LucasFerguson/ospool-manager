@@ -17,7 +17,9 @@ from pathlib import Path
 import htcondor2 as htcondor
 from rich.console import Console
 from rich.live import Live
+from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from .config import Config
 
@@ -158,8 +160,9 @@ def watch(cfg: Config, cluster_id: Optional[int] = None, interval: int = 5) -> N
 _DETAIL_PROJECTION = [
     "ClusterId", "ProcId", "JobStatus", "Cmd", "Owner",
     "HoldReason", "EnteredCurrentStatus", "RemoteHost",
-    "JobStartDate", "QDate", "RequestCpus", "RequestMemory", "RequestDisk",
-    "NumJobStarts", "NumShadowStarts",
+    "JobStartDate", "JobCurrentStartDate", "CompletionDate",
+    "QDate", "RequestCpus", "RequestMemory", "RequestDisk",
+    "NumJobStarts", "NumShadowStarts", "TransferInput",
 ]
 
 _IDLE = 1
@@ -200,6 +203,111 @@ def _print_job_info(j: dict) -> None:
     console.print(f"  Job starts    : {starts}")
     if hold:
         console.print(f"  Hold reason   : [bold red]{hold}[/bold red]")
+
+
+def _fmt_ts(ts) -> str:
+    """Format a unix timestamp as a human-readable string, or '—' if missing."""
+    if ts is None:
+        return "—"
+    try:
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(ts)))
+    except (ValueError, TypeError):
+        return "—"
+
+
+def _duration(start_ts, end_ts) -> str:
+    """Return a human-readable duration between two unix timestamps."""
+    if start_ts is None or end_ts is None:
+        return "—"
+    try:
+        return _elapsed(int(start_ts)) if end_ts == start_ts else _elapsed_between(int(start_ts), int(end_ts))
+    except (ValueError, TypeError):
+        return "—"
+
+
+def _elapsed_between(start: int, end: int) -> str:
+    seconds = max(0, end - start)
+    d, rem = divmod(seconds, 86400)
+    h, rem = divmod(rem, 3600)
+    m, s   = divmod(rem, 60)
+    if d:
+        return f"{d}d {h:02}h {m:02}m"
+    if h:
+        return f"{h}h {m:02}m {s:02}s"
+    return f"{m}m {s:02}s"
+
+
+def report_job(cfg: Config, cluster_id: int) -> None:
+    """Print a metadata report panel for a single job cluster."""
+    j = _query_job(cfg, cluster_id)
+    if j is None:
+        console.print(f"[yellow]Cluster {cluster_id} not found in queue.[/yellow]")
+        return
+
+    status_id = int(j.get("JobStatus", 0))
+    label     = _STATUS_LABEL.get(status_id, str(status_id))
+    style     = _STATUS_STYLE.get(status_id, "")
+    cmd       = Path(str(j.get("Cmd", "?"))).name
+
+    qdate      = j.get("QDate")
+    start_date = j.get("JobStartDate") or j.get("JobCurrentStartDate")
+    comp_date  = j.get("CompletionDate")
+    entered    = j.get("EnteredCurrentStatus")
+
+    # Run duration: completed → CompletionDate - JobStartDate
+    #               running   → now - JobCurrentStartDate
+    #               not yet   → —
+    now = int(time.time())
+    if start_date and comp_date:
+        run_duration = _elapsed_between(int(start_date), int(comp_date))
+    elif start_date and status_id == _RUNNING:
+        run_duration = _elapsed_between(int(start_date), now) + "  (ongoing)"
+    else:
+        run_duration = "—"
+
+    queue_wait = (
+        _elapsed_between(int(qdate), int(start_date))
+        if qdate and start_date else "—"
+    )
+
+    transfer_input = str(j.get("TransferInput", "") or "")
+    input_data = _data_inputs(transfer_input) or "—"
+
+    host   = str(j.get("RemoteHost", "—") or "—")
+    cpus   = str(j.get("RequestCpus", "?"))
+    mem    = str(j.get("RequestMemory", "?"))
+    disk   = str(j.get("RequestDisk", "?"))
+    starts = int(j.get("NumJobStarts", 0))
+    hold   = str(j.get("HoldReason", "") or "")
+
+    rows = [
+        ("Job",            f"[bold]{cluster_id}.{int(j.get('ProcId', 0))}[/bold]"),
+        ("Status",         f"[{style}]{label}[/{style}]"),
+        ("Executable",     cmd),
+        ("Input data",     input_data),
+        ("",               ""),
+        ("Submitted",      _fmt_ts(qdate)),
+        ("Started",        _fmt_ts(start_date)),
+        ("Completed",      _fmt_ts(comp_date)),
+        ("Queue wait",     queue_wait),
+        ("Run duration",   f"[bold]{run_duration}[/bold]"),
+        ("",               ""),
+        ("Execute host",   host),
+        ("CPUs",           cpus),
+        ("Memory",         f"{mem} MB"),
+        ("Disk",           f"{disk} KB"),
+        ("Job starts",     str(starts)),
+    ]
+    if hold:
+        rows.append(("Hold reason", f"[bold red]{hold}[/bold red]"))
+
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="dim", min_width=14)
+    grid.add_column()
+    for key, val in rows:
+        grid.add_row(key, val)
+
+    console.print(Panel(grid, title=f"Job Report  {cluster_id}", expand=False))
 
 
 def follow_log(
