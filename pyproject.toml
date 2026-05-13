@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "ospool-manager"
 version = "0.1.0"
 description = "CLI for managing OSPool/HTCondor workflows from a local machine"
-requires-python = ">=3.9"
+requires-python = ">=3.8"
 dependencies = [
     "typer[all]>=0.12",
     # htcondor2 is the v2 Python bindings — no local daemon needed.
