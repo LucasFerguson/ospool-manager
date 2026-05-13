@@ -6,7 +6,7 @@ from typing import Annotated, Optional
 from datetime import datetime, timezone
 
 from . import config as cfg_module
-from . import token, submit, monitor as monitor_mod, fetch, remote as remote_mod, upload as upload_mod, runs as runs_mod, watcher as watcher_mod
+from . import token, submit, monitor as monitor_mod, fetch, remote as remote_mod, upload as upload_mod, runs as runs_mod, watcher as watcher_mod, osdf as osdf_mod
 
 app = typer.Typer(
     name="ospool",
@@ -106,6 +106,20 @@ def sync_remote(
 # ---------------------------------------------------------------------------
 # Data
 # ---------------------------------------------------------------------------
+
+@app.command("ls", rich_help_panel="Data")
+def osdf_ls(
+    path: Annotated[Optional[str], typer.Argument(
+        help="Directory to list. Relative paths are joined onto your OSDF root. "
+             "Absolute paths and osdf:// URLs are used as-is. "
+             "Defaults to your OSDF large-storage root."
+    )] = None,
+    config: Annotated[Optional[Path], typer.Option("--config", "-c")] = None,
+) -> None:
+    """List contents of your OSDF large-storage directory (or any OSDF path)."""
+    c = _cfg(config)
+    osdf_mod.list_dir(c, path)
+
 
 @app.command(rich_help_panel="Data")
 def upload(

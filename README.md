@@ -44,6 +44,7 @@ ospool-manager/
     ├── submit.py           # Phase 2: submit jobs and DAGs (spool / ap-project)
     ├── monitor.py          # Phase 3: watch job status, tail logs
     ├── fetch.py            # Phase 4: retrieve completed outputs
+    ├── osdf.py             # OSDF large-storage utilities (ls, etc.)
     └── token.py            # token fetch/refresh helpers
 ```
 
@@ -113,6 +114,31 @@ ospool fetch <cluster_id>              # fetch completed outputs to outputs/
 
 ospool token-fetch                     # fetch/refresh HTCondor auth token
 ospool stage <path>                    # stage local data to OSDF
+
+ospool upload [path]                   # upload data/ (or a specific file) to OSDF large storage
+ospool ls                              # list your OSDF large-storage root
+ospool ls outputs                      # list a subdirectory (relative to your OSDF root)
+ospool ls /ospool/ap40/data/other-user # list any absolute OSDF path
+ospool ls osdf:///ospool/ap40/data/lucas.ferguson/outputs  # osdf:// URLs work too
+```
+
+## OSDF Large Storage
+
+Files in your OSDF root (`osdf.base_path` in config.toml) are accessible to jobs via `osdf://` URLs. Use `ospool upload` to stage data before submitting, and `ospool ls` to inspect what's there.
+
+```bash
+ospool upload data/10_03_2025_18_18_11-1.pcap   # upload a single file
+ospool upload                                     # upload entire data/ directory
+ospool ls                                         # browse your OSDF root
+ospool ls outputs                                 # check output files after a run
+```
+
+In a `.sub` file, reference staged files like this:
+
+```
+OSDF_BASE = osdf:///ospool/ap40/data/your-username
+transfer_input_files  = $(OSDF_BASE)/10_03_2025_18_18_11-1.pcap
+transfer_output_remaps = "results.tar.gz=$(OSDF_BASE)/outputs/results_$(ClusterId).tar.gz"
 ```
 
 ## Local Remote-Submit Workflow

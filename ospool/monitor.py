@@ -43,7 +43,7 @@ _STATUS_STYLE = {
 
 _PROJECTION = [
     "ClusterId", "ProcId", "JobStatus", "Cmd",
-    "HoldReason", "EnteredCurrentStatus",
+    "HoldReason", "EnteredCurrentStatus", "QDate",
 ]
 
 console = Console()
@@ -77,6 +77,8 @@ def _build_table(jobs: list) -> Table:
     table.add_column("Time in State")
     table.add_column("Executable")
     table.add_column("Hold Reason")
+
+    jobs = sorted(jobs, key=lambda j: int(j.get("QDate", 0)), reverse=True)
 
     for j in jobs:
         status_id = int(j.get("JobStatus", 0))

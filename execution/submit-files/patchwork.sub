@@ -18,7 +18,7 @@ should_transfer_files   = YES
 when_to_transfer_output = ON_EXIT
 
 OSDF_BASE = osdf:///ospool/ap40/data/lucas.ferguson
-transfer_input_files  = $(OSDF_BASE)/pcaps/2026-04-28/10_15_2025_19_22_15-1.pcap, \
+transfer_input_files  = $(OSDF_BASE)/10_03_2025_18_18_11-1.pcap, \
                         execution/job-scripts/analysis.tar.gz, \
                         execution/job-scripts/ospool_main.sh
 
