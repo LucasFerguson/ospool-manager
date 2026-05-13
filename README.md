@@ -89,6 +89,24 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+#### Get access token
+```
+mkdir -p ~/.condor/tokens.d
+ssh lucas.ferguson@ospool-ap2140.chtc.wisc.edu condor_token_fetch > ~/.condor/tokens.d/ap40
+chmod 600 ~/.condor/tokens.d/*
+```
+
+#### Create user configuration
+
+Create a user_config file in your .condor directory (i.e. ~/.condor/user_config). In this file, add these lines:
+
+```
+SCHEDD_HOST = ospool-ap2140.chtc.wisc.edu
+COLLECTOR_HOST = cm-1.ospool.osg-htc.org
+```
+
+
+
 Requires HTCondor2 Python bindings (`htcondor2`) and a valid auth token in `~/.condor/tokens.d/`.
 
 Get a token with:
