@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 import typer
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 try:
     from typing import Annotated
 except ImportError:
@@ -196,7 +196,7 @@ def monitor(
 
 @app.command(rich_help_panel="Jobs")
 def report(
-    cluster_ids: Annotated[Optional[list[int]], typer.Argument(help="Cluster ID(s) to report on.")] = None,
+    cluster_ids: Annotated[Optional[List[int]], typer.Argument(help="Cluster ID(s) to report on.")] = None,
     last: Annotated[Optional[int], typer.Option("--last", "-n", help="Report on the N most recent jobs.")] = None,
     csv_out: Annotated[bool, typer.Option("--csv", help="Output as CSV instead of rich panels.")] = False,
     out: Annotated[Optional[Path], typer.Option("--out", "-o", help="Write CSV to this file (implies --csv).")] = None,
@@ -290,7 +290,7 @@ def runs(
 
 @app.command(rich_help_panel="Jobs")
 def rm(
-    cluster_ids: Annotated[list[int], typer.Argument(help="Cluster ID(s) to remove.")],
+    cluster_ids: Annotated[List[int], typer.Argument(help="Cluster ID(s) to remove.")],
     config: Annotated[Optional[Path], typer.Option("--config", "-c")] = None,
 ) -> None:
     """Remove (kill) one or more job clusters."""
