@@ -7,9 +7,9 @@
 JOB_DIR=$PWD
 PW_PATH="${JOB_DIR}/analysis"
 
-# --- Unpack analysis bundle -----------------------------------------------
+# --- Unpack analysis bundle ---------------------------------------------------
 # HTCondor on OSPool doesn't reliably transfer directories recursively,
-# so run_ospool_patchwork.sh tars analysis/ before rsync and we untar here.
+# so we tar analysis/ before transfer and untar here.
 if [ -f "${JOB_DIR}/analysis.tar.gz" ]; then
   echo "=== unpacking analysis.tar.gz ==="
   tar xzf "${JOB_DIR}/analysis.tar.gz" -C "${JOB_DIR}"
@@ -19,11 +19,8 @@ elif [ ! -d "${PW_PATH}" ]; then
   exit 1
 fi
 
-# --- Create venv and install Python packages ------------------------------
-# Alpine Linux (netshoot) uses PEP 668 — system pip is blocked.
-# We create a job-local venv so installs are isolated and reliable.
+# --- Create venv and install Python packages ----------------------------------
 VENV="${JOB_DIR}/venv"
-# Suppress SyntaxWarning spam from auto-generated dissectable.py (regex escape sequences)
 export PYTHONWARNINGS="ignore::SyntaxWarning"
 echo "=== creating venv ==="
 python3 -m venv "${VENV}"
@@ -35,24 +32,32 @@ else
 fi
 PYTHON="${VENV}/bin/python3"
 PATCHWORK_DATA_PATH="${JOB_DIR}/patchwork_data"
-PROCESSING_TEMP_DIR="${JOB_DIR}/temp"
+mkdir -p "${PATCHWORK_DATA_PATH}"
 
-# --- Locate the transferred pcap -----------------------------------------
-PCAP_FILE=$(ls "${JOB_DIR}"/*.pcap 2>/dev/null | head -1 || true)
-if [ -z "${PCAP_FILE}" ]; then
-  echo "ERROR: No .pcap file found in ${JOB_DIR}" >&2
+# --- Find the site archive (e.g. INDI.tar.gz, LOSA.tar.gz, MAX.tar.gz) -------
+# Any .tar.gz that is not analysis.tar.gz is treated as the site archive.
+SITE_ARCHIVE=$(ls "${JOB_DIR}"/*.tar.gz 2>/dev/null \
+  | grep -v 'analysis\.tar\.gz' \
+  | head -1 || true)
+
+if [ -z "${SITE_ARCHIVE}" ]; then
+  echo "ERROR: No site .tar.gz found in ${JOB_DIR}" >&2
+  echo "  Expected something like INDI.tar.gz, LOSA.tar.gz, or MAX.tar.gz" >&2
   exit 1
 fi
-SITE=$(basename "${PCAP_FILE}" .pcap)
+
+SITE=$(basename "${SITE_ARCHIVE}" .tar.gz)
 echo "SITE=${SITE}"
-echo "PCAP_FILE=${PCAP_FILE}"
+echo "SITE_ARCHIVE=${SITE_ARCHIVE}"
 
-# --- Prepare directories --------------------------------------------------
-[ -d "${PROCESSING_TEMP_DIR}" ] && rm -rf "${PROCESSING_TEMP_DIR}"
-mkdir -p "${PATCHWORK_DATA_PATH}" "${PROCESSING_TEMP_DIR}/${SITE}"
+# --- Unpack the site archive --------------------------------------------------
+# Produces: JOB_DIR/SITE/all_packet_traces_*/SITE_node0_packet_trace.tgz
+echo "=== unpacking site archive ==="
+tar xzf "${SITE_ARCHIVE}" -C "${JOB_DIR}"
+SITE_PATH="${JOB_DIR}/${SITE}"
+echo "SITE_PATH=${SITE_PATH}"
 
-# --- Generate a per-job patchwork config with correct absolute paths ------
-# (Bypasses the hardcoded /home/ubuntu/ paths in the original patchwork_config.sh)
+# --- Generate a per-job patchwork config with correct absolute paths ----------
 cat > "${JOB_DIR}/ospool_patchwork_config.sh" <<PWCFG
 #!/bin/bash
 set -e
@@ -64,22 +69,21 @@ PWCFG
 export PATCHWORK_CONFIG="${JOB_DIR}/ospool_patchwork_config.sh"
 echo "PATCHWORK_CONFIG=${PATCHWORK_CONFIG}"
 
-# --- Stage pcap into DEST_PATH --------------------------------------------
-# Bypasses process_structure1.sh (which unpacks .tgz archives we don't have).
-# We mirror the MD5-based path that process_structure1.sh and run.sh share.
-SITE_PATH="${PROCESSING_TEMP_DIR}/${SITE}"
-PATH_CODE=$(echo "${SITE_PATH}" | md5sum | awk '{ print $1 }')
-DEST_PATH="${PATCHWORK_DATA_PATH}/${PATH_CODE}"
-mkdir -p "${DEST_PATH}"
-echo "PATH_OF_SAMPLE=${SITE_PATH}" > "${DEST_PATH}/origin"
-echo "${DEST_PATH}" >> "${PATCHWORK_DATA_PATH}/index"
-cp "${PCAP_FILE}" "${DEST_PATH}/"
-echo "DEST_PATH=${DEST_PATH}"
+# --- Unpack nested tgz archives into DEST_PATH --------------------------------
+# process_structure1.sh:
+#   1. Finds all_packet_traces_*.tgz in SITE_PATH → unpacks to DEST_PATH
+#   2. Finds *node*.tgz in DEST_PATH → unpacks to SITE_nodeN_packet_trace/
+# After this, DEST_PATH contains the full nested path that digest.py expects:
+#   DEST_PATH/all_packet_traces_.../SITE_nodeN_packet_trace/
+#     packet_trace/UPLINK/pcap_MM_DD_YYYY_HH:MM:SS/NAME-RUN.pcap
+echo "=== running process_structure1.sh ==="
+bash "${PW_PATH}/process_structure1.sh" "${SITE_PATH}"
+cd "${JOB_DIR}"  # process_structure1.sh may cd around; reset to job dir
 
-# --- Run digest jobs ------------------------------------------------------
+# --- Run digest jobs ----------------------------------------------------------
 "${PW_PATH}/run.sh" "${SITE_PATH}"
 
-# --- Wait for parallel digest jobs to finish ------------------------------
+# --- Wait for parallel digest jobs to finish ----------------------------------
 echo "Waiting for analyses to terminate."
 SLEEPINTERVAL=5
 CHECK_CMD="ps ax | grep run_job_ | grep -v grep | wc -l"
@@ -92,8 +96,8 @@ while [ "0" != "$(eval "${CHECK_CMD}")" ]; do
 done
 echo "Analysis terminated. CHECK_RUNS=${CHECK_RUNS}"
 
-# --- Post-processing and graphing -----------------------------------------
-DBFILES=$(find "${DEST_PATH}" -name "dbfile_*" | tr '\n' ' ')
+# --- Post-processing and graphing ---------------------------------------------
+DBFILES=$(find "${PATCHWORK_DATA_PATH}" -name "dbfile_*" | tr '\n' ' ')
 "${PYTHON}" "${PW_PATH}/analyse.py" db_index ${DBFILES}
 "${PYTHON}" "${PW_PATH}/analyses/analyse_to_sizehisto.py"  answer_framesizes db_index
 "${PYTHON}" "${PW_PATH}/analyses/analyse_to_protodiverse.py" answer_protocols db_index
@@ -103,7 +107,7 @@ DBFILES=$(find "${DEST_PATH}" -name "dbfile_*" | tr '\n' ' ')
 "${PYTHON}" "${PW_PATH}/graphing/protocol_diversity.py"       answer_protocols answer_protocols_popularity
 "${PYTHON}" "${PW_PATH}/graphing/protocol_popularity.py"      answer_protocols_popularity
 
-# --- Bundle all results for transfer back to AP ---------------------------
+# --- Bundle all results for transfer back to AP -------------------------------
 echo "=== bundling results ==="
 tar czf patchwork_results.tar.gz \
   patchwork_data/ \

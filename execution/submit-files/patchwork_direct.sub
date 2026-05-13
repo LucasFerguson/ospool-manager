@@ -1,0 +1,39 @@
+universe = container
+container_image = docker://nicolaka/netshoot:v0.15
+executable = execution/job-scripts/ospool_main.sh
+
+log    = /home/lucas.ferguson/ospool-manager/logs/patchwork.$(ClusterId).log
+output = /home/lucas.ferguson/ospool-manager/logs/patchwork.$(ClusterId).out
+error  = /home/lucas.ferguson/ospool-manager/logs/patchwork.$(ClusterId).err
+
+stream_output = true
+stream_error  = true
+want_io_proxy  = true
+
+request_cpus   = 10
+request_memory = 6 GB
+request_disk   = 40 GB
+
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+
+# Transfer the site archive (SITE.tar.gz) — NOT a bare .pcap.
+#
+# The site archive contains two layers of nested tgz archives that unpack
+# into the directory structure patchwork's digest.py expects:
+#   SITE/all_packet_traces_*/SITE_node0_packet_trace.tgz
+#     → packet_trace/UPLINK/pcap_MM_DD_YYYY_HH:MM:SS/NAME-RUN.pcap
+#
+# Change INDI.tar.gz to LOSA.tar.gz or MAX.tar.gz for other sites.
+#
+# Spool mode (local machine): paths are relative to local project root.
+# ap-project mode (after ospool sync remote --data): same relative paths
+#   resolve against initialdir = /home/lucas.ferguson/ospool-manager.
+#
+transfer_input_files  = data/INDI.tar.gz, \
+                        execution/job-scripts/analysis.tar.gz, \
+                        execution/job-scripts/ospool_main.sh
+
+transfer_output_files = patchwork_results.tar.gz
+
+queue 1

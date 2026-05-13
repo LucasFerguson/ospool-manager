@@ -6,3 +6,5 @@ execution/job-scripts/analysis
 outputs/*
 runs/*
 logs/*
+test_scratch/
+data/*
