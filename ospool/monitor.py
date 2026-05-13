@@ -10,7 +10,10 @@ Two monitoring modes:
 """
 from __future__ import annotations
 from typing import Optional
+import csv
+import io
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -170,11 +173,111 @@ _RUNNING = 2
 
 
 def _query_job(cfg: Config, cluster_id: int) -> Optional[dict]:
-    """Return the first proc of a cluster as a plain dict, or None if not found."""
+    """Return the first proc of a cluster as a plain dict. Checks queue then history."""
     schedd = _schedd(cfg)
     constraint = f'Owner == "{cfg.remote.username}" && ClusterId == {cluster_id}'
     jobs = schedd.query(constraint=constraint, projection=_DETAIL_PROJECTION)
-    return dict(jobs[0]) if jobs else None
+    if jobs:
+        return dict(jobs[0])
+    # Not in active queue — check history (completed/removed jobs)
+    hist = list(schedd.history(constraint=constraint, projection=_DETAIL_PROJECTION, match=1))
+    return dict(hist[0]) if hist else None
+
+
+def _query_jobs_multi(
+    cfg: Config,
+    cluster_ids: Optional[list[int]] = None,
+    last: Optional[int] = None,
+) -> list[dict]:
+    """
+    Return a list of job dicts.
+
+    - cluster_ids: fetch specific clusters (queue then history fallback).
+    - last: fetch the N most recent jobs from history (ignores cluster_ids).
+    Both sort by QDate descending (most recent first).
+    """
+    schedd = _schedd(cfg)
+    owner_constraint = f'Owner == "{cfg.remote.username}"'
+
+    if last is not None:
+        # Mirror the monitor: query the active queue first (newest jobs live here
+        # before being purged to history), then supplement with history for older
+        # completed jobs.  Merge, deduplicate, sort by QDate desc, take top N.
+        active = [dict(j) for j in schedd.query(
+            constraint=owner_constraint, projection=_DETAIL_PROJECTION
+        )]
+        hist = [dict(j) for j in schedd.history(
+            constraint=owner_constraint,
+            projection=_DETAIL_PROJECTION,
+            match=max(last * 5, 50),  # overfetch; we trim after sorting
+        )]
+        seen: set[int] = set()
+        merged = []
+        for j in active + hist:
+            cid = int(j.get("ClusterId", 0))
+            if cid not in seen:
+                seen.add(cid)
+                merged.append(j)
+        merged.sort(key=lambda j: int(j.get("QDate", 0)), reverse=True)
+        return merged[:last]
+
+    if cluster_ids:
+        id_list = ", ".join(str(i) for i in cluster_ids)
+        constraint = f'{owner_constraint} && ClusterId in {{{id_list}}}'
+        active = {int(j["ClusterId"]): dict(j)
+                  for j in schedd.query(constraint=constraint, projection=_DETAIL_PROJECTION)}
+        missing = [i for i in cluster_ids if i not in active]
+        for cid in missing:
+            c = f'{owner_constraint} && ClusterId == {cid}'
+            hist = list(schedd.history(constraint=c, projection=_DETAIL_PROJECTION, match=1))
+            if hist:
+                active[cid] = dict(hist[0])
+        jobs = list(active.values())
+        jobs.sort(key=lambda j: int(j.get("QDate", 0)), reverse=True)
+        return jobs
+
+    return []
+
+
+def _job_to_record(j: dict) -> dict:
+    """Flatten a job classad dict into a plain report record."""
+    status_id  = int(j.get("JobStatus", 0))
+    qdate      = j.get("QDate")
+    start_date = j.get("JobStartDate") or j.get("JobCurrentStartDate")
+    comp_date  = j.get("CompletionDate")
+    now        = int(time.time())
+
+    run_secs: Optional[int] = None
+    if start_date and comp_date:
+        run_secs = max(0, int(comp_date) - int(start_date))
+    elif start_date and status_id == _RUNNING:
+        run_secs = max(0, now - int(start_date))
+
+    wait_secs: Optional[int] = None
+    if qdate and start_date:
+        wait_secs = max(0, int(start_date) - int(qdate))
+
+    transfer_input = str(j.get("TransferInput", "") or "")
+
+    return {
+        "cluster_id":       int(j.get("ClusterId", 0)),
+        "proc_id":          int(j.get("ProcId", 0)),
+        "status":           _STATUS_LABEL.get(status_id, str(status_id)),
+        "input_data":       _data_inputs(transfer_input),
+        "submitted":        _fmt_ts(qdate),
+        "started":          _fmt_ts(start_date),
+        "completed":        _fmt_ts(comp_date),
+        "queue_wait_s":     wait_secs if wait_secs is not None else "",
+        "queue_wait":       _elapsed_between(int(qdate), int(start_date)) if wait_secs is not None else "—",
+        "run_duration_s":   run_secs if run_secs is not None else "",
+        "run_duration":     _elapsed_between(int(start_date), int(comp_date) if comp_date else now)
+                            if run_secs is not None else "—",
+        "execute_host":     str(j.get("RemoteHost", "") or ""),
+        "cpus":             j.get("RequestCpus", ""),
+        "memory_mb":        j.get("RequestMemory", ""),
+        "disk_kb":          j.get("RequestDisk", ""),
+        "job_starts":       int(j.get("NumJobStarts", 0)),
+    }
 
 
 def _print_job_info(j: dict) -> None:
@@ -308,6 +411,49 @@ def report_job(cfg: Config, cluster_id: int) -> None:
         grid.add_row(key, val)
 
     console.print(Panel(grid, title=f"Job Report  {cluster_id}", expand=False))
+
+
+_CSV_FIELDS = [
+    "cluster_id", "proc_id", "status", "input_data",
+    "submitted", "started", "completed",
+    "queue_wait", "queue_wait_s",
+    "run_duration", "run_duration_s",
+    "execute_host", "cpus", "memory_mb", "disk_kb", "job_starts",
+]
+
+
+def report_jobs_csv(
+    cfg: Config,
+    cluster_ids: Optional[list[int]] = None,
+    last: Optional[int] = None,
+    out: Optional[Path] = None,
+) -> None:
+    """
+    Write a CSV report for multiple jobs.
+
+    Pass cluster_ids for specific jobs, or last=N for the N most recent.
+    Writes to out (file path) or stdout if out is None.
+    """
+    jobs = _query_jobs_multi(cfg, cluster_ids=cluster_ids, last=last)
+    if not jobs:
+        console.print("[yellow]No jobs found.[/yellow]")
+        return
+
+    records = [_job_to_record(j) for j in jobs]
+
+    if out is not None:
+        fh = open(out, "w", newline="")
+    else:
+        fh = sys.stdout  # type: ignore[assignment]
+
+    try:
+        writer = csv.DictWriter(fh, fieldnames=_CSV_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(records)
+    finally:
+        if out is not None:
+            fh.close()
+            console.print(f"[dim]Wrote {len(records)} rows to {out}[/dim]")
 
 
 def follow_log(

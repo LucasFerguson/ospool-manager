@@ -192,12 +192,35 @@ def monitor(
 
 @app.command(rich_help_panel="Jobs")
 def report(
-    cluster_id: Annotated[int, typer.Argument(help="Cluster ID to report on.")],
+    cluster_ids: Annotated[Optional[list[int]], typer.Argument(help="Cluster ID(s) to report on.")] = None,
+    last: Annotated[Optional[int], typer.Option("--last", "-n", help="Report on the N most recent jobs.")] = None,
+    csv_out: Annotated[bool, typer.Option("--csv", help="Output as CSV instead of rich panels.")] = False,
+    out: Annotated[Optional[Path], typer.Option("--out", "-o", help="Write CSV to this file (implies --csv).")] = None,
     config: Annotated[Optional[Path], typer.Option("--config", "-c")] = None,
 ) -> None:
-    """Show a metadata report for a job: timing, duration, resources."""
+    """Show job metadata report: timing, duration, resources.
+
+    Examples:
+
+      ospool report 14798972              # single job panel
+      ospool report 14798972 14798971     # multiple panels
+      ospool report --last 10 --csv       # CSV of last 10 jobs
+      ospool report --last 20 --out jobs.csv
+      ospool report 14798972 --csv        # specific job as CSV
+    """
     c = _cfg(config)
-    monitor_mod.report_job(c, cluster_id)
+    if out is not None:
+        csv_out = True
+
+    if csv_out or last is not None:
+        ids = list(cluster_ids) if cluster_ids else None
+        monitor_mod.report_jobs_csv(c, cluster_ids=ids, last=last, out=out)
+    elif cluster_ids:
+        for cid in cluster_ids:
+            monitor_mod.report_job(c, cid)
+    else:
+        typer.echo("Provide cluster ID(s), or use --last N [--csv].", err=True)
+        raise typer.Exit(1)
 
 
 @app.command("logs", rich_help_panel="Jobs")
@@ -280,11 +303,17 @@ def rm(
 @app.command("fetch", rich_help_panel="Outputs")
 def fetch_cmd(
     cluster_id: Annotated[Optional[int], typer.Argument(help="Cluster ID to fetch (omit to fetch all).")] = None,
+    spool: Annotated[bool, typer.Option("--spool", "-s", help="Retrieve from schedd spool instead of OSDF. Use when output was not remapped to OSDF.")] = False,
     config: Annotated[Optional[Path], typer.Option("--config", "-c")] = None,
 ) -> None:
     """Fetch job outputs + logs from OSDF to local outputs/. Omit cluster ID to fetch everything."""
     c = _cfg(config)
-    if cluster_id is None:
+    if spool:
+        if cluster_id is None:
+            typer.echo("ERROR: --spool requires a cluster ID.", err=True)
+            raise typer.Exit(1)
+        dest = fetch.retrieve_spool(c, cluster_id)
+    elif cluster_id is None:
         dest = fetch.fetch_all(c)
     else:
         dest = fetch.fetch_outputs(c, cluster_id)
