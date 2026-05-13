@@ -10,7 +10,7 @@ stream_output = true
 stream_error  = true
 want_io_proxy  = true
 
-request_cpus   = 6
+request_cpus   = 4
 request_memory = 6 GB
 request_disk   = 40 GB
 
@@ -30,15 +30,11 @@ when_to_transfer_output = ON_EXIT
 # ap-project mode (after ospool sync remote --data): same relative paths
 #   resolve against initialdir = /home/lucas.ferguson/ospool-manager.
 #
-transfer_input_files  = data/MAX.tar.gz, \
+transfer_input_files  = data/LOSA.tar.gz, \
                         execution/job-scripts/analysis.tar.gz, \
                         execution/job-scripts/ospool_main.sh
 
 transfer_output_files = patchwork_results.tar.gz
-# Remap to the OSDF origin raw filesystem path
-# The condor schedd on ap40 writes here directly — no Pelican plugin needed,
-# so this works even while the OSDF director is returning 404s.
-# fetch.py already looks in this location.
 transfer_output_remaps = "patchwork_results.tar.gz=/ospool/ap40/data/lucas.ferguson/outputs/patchwork_results_$(ClusterId).tar.gz"
 
 queue 1

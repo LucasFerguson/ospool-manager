@@ -25,90 +25,74 @@ def _osdf_ssh_path(cfg: Config) -> str:
     return cfg.osdf.base_path.replace("osdf://", "")
 
 
+def _spool_cp(cfg: Config, cluster_ids: Optional[list[int]], dest_dir: Path, ssh_target: str, ssh_opts: list[str]) -> list[str]:
+    """
+    SSH to the AP, find patchwork_results.tar.gz files in the condor spool for
+    the given cluster IDs (or all belonging to this user), copy them to dest_dir
+    on the AP with cluster-ID-stamped names, and return the list of remote paths.
+
+    This is the fallback when transfer_output_remaps fails to write to OSDF/home.
+    """
+    if cluster_ids:
+        # Build a grep pattern to match any of the requested cluster IDs
+        pattern = "|".join(f"cluster{c}" for c in cluster_ids)
+        find_filter = f"| grep -E '{pattern}'"
+    else:
+        find_filter = ""
+
+    script = f"""
+set -e
+mkdir -p {dest_dir}
+find /var/lib/condor/spool -name "patchwork_results.tar.gz" -user {cfg.remote.username} 2>/dev/null {find_filter} | while read src; do
+  cluster=$(echo "$src" | grep -oE 'cluster[0-9]+' | grep -oE '[0-9]+')
+  dest="{dest_dir}/patchwork_results_${{cluster}}.tar.gz"
+  if [ ! -f "$dest" ]; then
+    cp "$src" "$dest"
+    echo "$dest"
+  fi
+done
+"""
+    result = subprocess.run(
+        ["ssh", *ssh_opts, ssh_target, script],
+        capture_output=True, text=True,
+    )
+    copied = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
+    return copied
+
+
 def retrieve_spool(cfg: Config, cluster_id: int, dest: Optional[Path] = None) -> Path:
     """
-    Retrieve output files for a spool-mode job that had no OSDF output remap.
-
-    schedd.retrieve() fails locally because the job's log/output/error use
-    absolute AP paths that don't exist on WSL. Instead, we SSH to the AP and
-    run condor_transfer_data there (where those paths exist), collect the
-    output file into a temp dir, rsync it back, then clean up.
-    Returns the local destination path.
+    Retrieve output for a single job from the condor spool on the AP.
+    Copies directly from /var/lib/condor/spool — no condor_transfer_data needed.
     """
     if dest is None:
         dest = cfg.local.outputs_dir / str(cluster_id)
-
     dest = dest.resolve()
     dest.mkdir(parents=True, exist_ok=True)
 
     ssh_target = f"{cfg.remote.username}@{cfg.remote.access_point}"
     ssh_opts = _ssh_opts(cfg)
-    ap_tmp = f"{cfg.remote.project_dir}/.spool_retrieve_{cluster_id}"
+    ap_staging = f"{cfg.remote.project_dir}/outputs"
 
-    print(f"Retrieving spooled output for cluster {cluster_id} via AP ...")
+    print(f"Recovering spooled output for cluster {cluster_id} from AP spool ...")
+    copied = _spool_cp(cfg, [cluster_id], ap_staging, ssh_target, ssh_opts)
 
-    # condor_transfer_data writes output files back to the job's iwd (initialdir),
-    # which for spool-mode jobs is the schedd's spool directory, not CWD.
-    # Strategy:
-    #   1. Find where the schedd spool sandbox is for this job
-    #   2. Run condor_transfer_data to flush the outputs there
-    #   3. Rsync the output files (*.tar.gz, *.txt, etc.) back — skipping log files
-    #      which are already on the AP in the logs/ dir
+    if not copied:
+        print(f"  No spool file found for cluster {cluster_id} — spool may have been purged.")
+        return dest
 
-    # Step 1: find the spool sandbox path via condor_q
-    find_result = subprocess.run(
-        ["ssh", *ssh_opts, ssh_target,
-         f"condor_q {cluster_id}.0 -format '%s\\n' Iwd 2>/dev/null "
-         f"|| condor_history {cluster_id}.0 -format '%s\\n' Iwd 2>/dev/null | head -1"],
-        capture_output=True, text=True,
-    )
-    iwd = find_result.stdout.strip().splitlines()
-    iwd = [l for l in iwd if l.strip()]
-    sandbox = iwd[0] if iwd else None
-    print(f"  Job iwd: {sandbox or '(not found — job may have been purged from spool)'}")
-
-    # Step 2: run condor_transfer_data on the AP
-    result = subprocess.run(
-        ["ssh", *ssh_opts, ssh_target,
-         f"condor_transfer_data {cluster_id}.0 2>&1"],
-        capture_output=True, text=True,
-    )
-    if result.stdout.strip():
-        print(f"  condor_transfer_data: {result.stdout.strip()}")
-    if result.returncode != 0 and result.stderr.strip():
-        print(f"  stderr: {result.stderr.strip()}")
-
-    # Step 3: rsync output files from the sandbox back (skip .log/.out/.err)
-    if sandbox:
-        print(f"  Rsyncing output files from {sandbox}/ ...")
+    for remote_path in copied:
         subprocess.run(
             ["rsync", "-az", "--info=progress2",
-             "--exclude=*.log", "--exclude=*.out", "--exclude=*.err",
-             "--exclude=analysis.tar.gz", "--exclude=analysis/",
-             "--exclude=venv/", "--exclude=*.pcap", "--exclude=*.tar.gz.bak",
-             "--include=patchwork_results*.tar.gz",
-             "--include=*.tar.gz", "--include=*.txt", "--include=*.csv",
-             "--include=*.png", "--exclude=*",
              "-e", " ".join(["ssh"] + ssh_opts),
-             f"{ssh_target}:{sandbox}/",
-             str(dest) + "/"],
+             f"{ssh_target}:{remote_path}", str(dest) + "/"],
             check=True,
         )
-    else:
-        print("  WARNING: could not locate spool sandbox — no files to rsync.")
-
-    # Rename files to include cluster ID so they don't collide with other jobs
-    for f in list(dest.iterdir()):
-        if str(cluster_id) not in f.name:
-            stem = f.stem
-            suffix = "".join(f.suffixes)
-            f.rename(dest / f"{stem}_{cluster_id}{suffix}")
 
     final_files = list(dest.iterdir())
     print(f"\nRetrieved {len(final_files)} file(s) to {dest}/:")
     for f in sorted(final_files):
         print(f"  {f.name}  ({f.stat().st_size / 1024:.1f} KB)")
-
     return dest
 
 
@@ -144,11 +128,8 @@ def fetch_outputs(cfg: Config, cluster_id: int, dest: Optional[Path] = None) -> 
     remote_files = [f for f in find_result.stdout.strip().splitlines() if f]
 
     if not remote_files:
-        print(f"No files matching *{cluster_id}* found in:")
-        print(f"  {ap_home_outputs}/")
-        print(f"  {osdf_outputs}/")
-        print("Job may still be running or output remap failed.")
-        return dest
+        print(f"No files matching *{cluster_id}* found in outputs dirs — trying spool recovery ...")
+        return retrieve_spool(cfg, cluster_id, dest)
 
     print(f"Found on AP:")
     for f in remote_files:
@@ -243,6 +224,22 @@ def fetch_all(cfg: Config, dest: Optional[Path] = None) -> Path:
          f"{ssh_target}:{osdf_outputs}/",
          str(dest) + "/"],
     )
+
+    # Also sweep the condor spool for any outputs that never made it to the outputs dirs
+    print(f"\nSweeping condor spool for any remaining output files ...")
+    ap_staging = f"{cfg.remote.project_dir}/outputs"
+    spool_copied = _spool_cp(cfg, None, ap_staging, ssh_target, ssh_opts)
+    if spool_copied:
+        print(f"  Found {len(spool_copied)} file(s) in spool — rsyncing ...")
+        subprocess.run(
+            ["rsync", "-az", "--info=progress2",
+             "-e", " ".join(["ssh"] + ssh_opts),
+             f"{ssh_target}:{ap_staging}/",
+             str(dest) + "/"],
+            check=True,
+        )
+    else:
+        print("  No new files found in spool.")
 
     local_files = list(dest.iterdir())
     print(f"\nFetched {len(local_files)} file(s) to {dest}/:")

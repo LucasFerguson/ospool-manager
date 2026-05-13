@@ -7,13 +7,30 @@
 JOB_DIR=$PWD
 PW_PATH="${JOB_DIR}/analysis"
 
+_log() { echo "[$(date '+%H:%M:%S')] $*"; }
+_dir_snapshot() {
+  local label=$1 dir=$2
+  _log "--- ${label}: ${dir}"
+  if [ -d "${dir}" ]; then
+    ls -lh "${dir}" 2>&1 | sed 's/^/    /'
+  else
+    echo "    (directory does not exist)"
+  fi
+}
+
+_log "=== Patchwork OSPool job starting ==="
+_log "JOB_DIR=${JOB_DIR}  HOST=$(hostname)  OS=$(uname -r)"
+_dir_snapshot "transferred files" "${JOB_DIR}"
+
 # --- Unpack analysis bundle ---------------------------------------------------
-# HTCondor on OSPool doesn't reliably transfer directories recursively,
-# so we tar analysis/ before transfer and untar here.
 if [ -f "${JOB_DIR}/analysis.tar.gz" ]; then
-  echo "=== unpacking analysis.tar.gz ==="
+  _log "=== unpacking analysis.tar.gz ==="
   tar xzf "${JOB_DIR}/analysis.tar.gz" -C "${JOB_DIR}"
-  echo "  OK: analysis/ unpacked"
+  _log "  OK: analysis/ unpacked"
+  # Show the graphing script checksum so we can confirm the right version landed
+  if [ -f "${PW_PATH}/graphing/framesizes_across_sites.py" ]; then
+    _log "  framesizes_across_sites.py md5: $(md5sum "${PW_PATH}/graphing/framesizes_across_sites.py" | awk '{print $1}')"
+  fi
 elif [ ! -d "${PW_PATH}" ]; then
   echo "ERROR: neither analysis.tar.gz nor analysis/ found in ${JOB_DIR}" >&2
   exit 1
@@ -22,42 +39,49 @@ fi
 # --- Create venv and install Python packages ----------------------------------
 VENV="${JOB_DIR}/venv"
 export PYTHONWARNINGS="ignore::SyntaxWarning"
-echo "=== creating venv ==="
+_log "=== creating venv ==="
 python3 -m venv "${VENV}"
-echo "=== pip install matplotlib numpy ==="
+_log "=== pip install matplotlib numpy ==="
 if "${VENV}/bin/pip" install --quiet matplotlib numpy 2>&1; then
-  echo "  OK: matplotlib and numpy installed"
+  _log "  OK: matplotlib and numpy installed"
 else
-  echo "  WARNING: pip install failed — graphing steps will likely fail" >&2
+  _log "  WARNING: pip install failed — graphing steps will likely fail"
 fi
 PYTHON="${VENV}/bin/python3"
 PATCHWORK_DATA_PATH="${JOB_DIR}/patchwork_data"
 mkdir -p "${PATCHWORK_DATA_PATH}"
 
+# --- Verify tshark is available (digest.py requires it) ----------------------
+_log "=== tshark check ==="
+if command -v tshark >/dev/null 2>&1; then
+  _log "  tshark: $(tshark --version 2>&1 | head -1)"
+  # Smoke test: does tshark produce Frame lines on a real pcap?
+  SAMPLE_PCAP=$(find "${JOB_DIR}" -name "*.tar.gz" | grep -v analysis | head -1)
+  _log "  (full tshark smoke test will run after site archive is unpacked)"
+else
+  _log "  WARNING: tshark not found — digest.py will fail to parse pcap files"
+fi
+
 # --- Find the site archive (e.g. INDI.tar.gz, LOSA.tar.gz, MAX.tar.gz) -------
-# Any .tar.gz that is not analysis.tar.gz is treated as the site archive.
 SITE_ARCHIVE=$(ls "${JOB_DIR}"/*.tar.gz 2>/dev/null \
   | grep -v 'analysis\.tar\.gz' \
   | head -1 || true)
 
 if [ -z "${SITE_ARCHIVE}" ]; then
   echo "ERROR: No site .tar.gz found in ${JOB_DIR}" >&2
-  echo "  Expected something like INDI.tar.gz, LOSA.tar.gz, or MAX.tar.gz" >&2
   exit 1
 fi
 
 SITE=$(basename "${SITE_ARCHIVE}" .tar.gz)
-echo "SITE=${SITE}"
-echo "SITE_ARCHIVE=${SITE_ARCHIVE}"
+_log "SITE=${SITE}  SITE_ARCHIVE=${SITE_ARCHIVE}  SIZE=$(du -sh "${SITE_ARCHIVE}" | cut -f1)"
 
 # --- Unpack the site archive --------------------------------------------------
-# Produces: JOB_DIR/SITE/all_packet_traces_*/SITE_node0_packet_trace.tgz
-echo "=== unpacking site archive ==="
+_log "=== unpacking site archive ==="
 tar xzf "${SITE_ARCHIVE}" -C "${JOB_DIR}"
 SITE_PATH="${JOB_DIR}/${SITE}"
-echo "SITE_PATH=${SITE_PATH}"
+_dir_snapshot "site archive contents" "${SITE_PATH}"
 
-# --- Generate a per-job patchwork config with correct absolute paths ----------
+# --- Generate patchwork config ------------------------------------------------
 cat > "${JOB_DIR}/ospool_patchwork_config.sh" <<PWCFG
 #!/bin/bash
 set -e
@@ -67,37 +91,101 @@ N=1
 PATCHWORK_JOB_SCALING=1
 PWCFG
 export PATCHWORK_CONFIG="${JOB_DIR}/ospool_patchwork_config.sh"
-echo "PATCHWORK_CONFIG=${PATCHWORK_CONFIG}"
+_log "PATCHWORK_CONFIG=${PATCHWORK_CONFIG}"
 
-# --- Unpack nested tgz archives into DEST_PATH --------------------------------
-# process_structure1.sh:
-#   1. Finds all_packet_traces_*.tgz in SITE_PATH → unpacks to DEST_PATH
-#   2. Finds *node*.tgz in DEST_PATH → unpacks to SITE_nodeN_packet_trace/
-# After this, DEST_PATH contains the full nested path that digest.py expects:
-#   DEST_PATH/all_packet_traces_.../SITE_nodeN_packet_trace/
-#     packet_trace/UPLINK/pcap_MM_DD_YYYY_HH:MM:SS/NAME-RUN.pcap
-echo "=== running process_structure1.sh ==="
+# --- Unpack nested tgz archives (process_structure1.sh) ----------------------
+_log "=== running process_structure1.sh ==="
 bash "${PW_PATH}/process_structure1.sh" "${SITE_PATH}"
-cd "${JOB_DIR}"  # process_structure1.sh may cd around; reset to job dir
+cd "${JOB_DIR}"
+
+_log "=== patchwork_data after process_structure1 ==="
+find "${PATCHWORK_DATA_PATH}" | head -40 | sed 's/^/    /'
+_log "  pcap count: $(find "${PATCHWORK_DATA_PATH}" -name '*.pcap' | wc -l)"
+
+# --- tshark smoke test on the actual pcap before digest runs -----------------
+FIRST_PCAP=$(find "${PATCHWORK_DATA_PATH}" -name "*.pcap" | head -1)
+if [ -n "${FIRST_PCAP}" ]; then
+  _log "=== tshark smoke test on ${FIRST_PCAP} ==="
+  # Show first 5 lines of tshark -V output so we can see Frame line format
+  tshark -V -r "${FIRST_PCAP}" 2>/dev/null | grep -vE '^ ' | head -10 | sed 's/^/    /'
+  # Count how many Frame lines match the regex digest.py expects
+  FRAME_LINES=$(tshark -V -r "${FIRST_PCAP}" 2>/dev/null | grep -vE '^ ' | grep -cE '^Frame [0-9]+: [0-9]+ bytes' || true)
+  _log "  Frame lines matching digest.py regex: ${FRAME_LINES}"
+fi
 
 # --- Run digest jobs ----------------------------------------------------------
+_log "=== running run.sh ==="
 "${PW_PATH}/run.sh" "${SITE_PATH}"
 
 # --- Wait for parallel digest jobs to finish ----------------------------------
-echo "Waiting for analyses to terminate."
+_log "Waiting for analyses to terminate."
 SLEEPINTERVAL=5
 CHECK_CMD="ps ax | grep run_job_ | grep -v grep | wc -l"
 CHECK_RUNS=0
 sleep "${SLEEPINTERVAL}"
 while [ "0" != "$(eval "${CHECK_CMD}")" ]; do
   CHECK_RUNS=$((CHECK_RUNS + 1))
-  echo "  Analyses ongoing: $(eval "${CHECK_CMD}"). CHECK_RUNS=${CHECK_RUNS}."
+  _log "  Analyses ongoing: $(eval "${CHECK_CMD}"). CHECK_RUNS=${CHECK_RUNS}."
   sleep "${SLEEPINTERVAL}"
 done
-echo "Analysis terminated. CHECK_RUNS=${CHECK_RUNS}"
+_log "Analysis terminated. CHECK_RUNS=${CHECK_RUNS}"
+
+# --- Inspect dbfiles before post-processing -----------------------------------
+_log "=== dbfile inspection ==="
+DBFILES=$(find "${PATCHWORK_DATA_PATH}" -name "dbfile_*" | tr '\n' ' ')
+_log "  dbfiles found: $(echo "${DBFILES}" | wc -w)"
+for DB in ${DBFILES}; do
+  _log "  ${DB}: $(du -sh "${DB}" | cut -f1)"
+  "${PYTHON}" - "${DB}" <<'PYEOF' 2>&1 | sed 's/^/    /'
+import sys, pickle
+
+with open(sys.argv[1], 'rb') as f:
+    d = pickle.load(f)
+
+# Count entries and check for Size: entries
+total_ts = 0
+total_stacks = 0
+size_entries = 0
+sample_stack = None
+
+for loc in d:
+    for node in d[loc]:
+        for iface in d[loc][node]:
+            for ts in d[loc][node][iface]:
+                total_ts += 1
+                for run in d[loc][node][iface][ts]:
+                    stacks = d[loc][node][iface][ts][run]
+                    total_stacks += len(stacks)
+                    for stack in stacks:
+                        if sample_stack is None:
+                            sample_stack = stack
+                        for layer in stack:
+                            if layer.startswith("Size:"):
+                                size_entries += 1
+
+print(f"locations={list(d.keys())}")
+print(f"total_timestamps={total_ts}  total_stacks={total_stacks}  size_entries={size_entries}")
+if sample_stack is not None:
+    print(f"sample stack ({len(sample_stack)} layers): {sample_stack[:8]}")
+else:
+    print("WARNING: no stacks found in dbfile")
+PYEOF
+done
+
+# Show run.log/run.err from each DEST_PATH to diagnose digest failures
+for RUNLOG in "${PATCHWORK_DATA_PATH}"/*/run.log; do
+  [ -f "${RUNLOG}" ] || continue
+  _log "  run.log ($(dirname "${RUNLOG}" | xargs basename)):"
+  cat "${RUNLOG}" | tail -20 | sed 's/^/    /'
+done
+for RUNERR in "${PATCHWORK_DATA_PATH}"/*/run.err; do
+  [ -f "${RUNERR}" ] && [ -s "${RUNERR}" ] || continue
+  _log "  run.err ($(dirname "${RUNERR}" | xargs basename)):"
+  cat "${RUNERR}" | tail -20 | sed 's/^/    /'
+done
 
 # --- Post-processing and graphing ---------------------------------------------
-DBFILES=$(find "${PATCHWORK_DATA_PATH}" -name "dbfile_*" | tr '\n' ' ')
+_log "=== post-processing ==="
 "${PYTHON}" "${PW_PATH}/analyse.py" db_index ${DBFILES}
 "${PYTHON}" "${PW_PATH}/analyses/analyse_to_sizehisto.py"  answer_framesizes db_index
 "${PYTHON}" "${PW_PATH}/analyses/analyse_to_protodiverse.py" answer_protocols db_index
@@ -107,14 +195,17 @@ DBFILES=$(find "${PATCHWORK_DATA_PATH}" -name "dbfile_*" | tr '\n' ' ')
 "${PYTHON}" "${PW_PATH}/graphing/protocol_diversity.py"       answer_protocols answer_protocols_popularity
 "${PYTHON}" "${PW_PATH}/graphing/protocol_popularity.py"      answer_protocols_popularity
 
+_log "=== graphs produced: $(find . -maxdepth 1 -name '*.png' | wc -l) png(s) ==="
+find . -maxdepth 1 -name "*.png" | sed 's/^/    /'
+
 # --- Bundle all results for transfer back to AP -------------------------------
-echo "=== bundling results ==="
+_log "=== bundling results ==="
 tar czf patchwork_results.tar.gz \
   patchwork_data/ \
   db_index \
   answer_framesizes answer_framesizes_P2 \
   answer_protocols  answer_protocols_P2 \
   $(find . -maxdepth 1 -name "*.png" 2>/dev/null | tr '\n' ' ')
-echo "  OK: patchwork_results.tar.gz created"
+_log "  OK: patchwork_results.tar.gz  $(du -sh patchwork_results.tar.gz | cut -f1)"
 
-echo "=== Patchwork OSPool analysis complete ==="
+_log "=== Patchwork OSPool analysis complete ==="
