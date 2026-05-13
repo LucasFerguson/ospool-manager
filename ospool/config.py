@@ -17,7 +17,23 @@ class RemoteConfig:
     schedd_host: str
     collector_host: str
     project_dir: str
-    ssh_key: str
+    ssh_key: Optional[str]  # path to private key, or None to use ssh-agent
+
+    def ssh_opts(self) -> list[str]:
+        """
+        SSH/rsync options for connecting to the AP.
+
+        If ssh_key is set: use that key explicitly (IdentitiesOnly=yes prevents
+        ssh-agent interference).
+        If ssh_key is unset/empty: omit -i so ssh-agent / ~/.ssh/id_* are tried.
+        """
+        base = ["-o", "StrictHostKeyChecking=no"]
+        if self.ssh_key:
+            return ["-i", self.ssh_key, "-o", "IdentitiesOnly=yes"] + base
+        return base
+
+    def ssh_target(self) -> str:
+        return f"{self.username}@{self.access_point}"
 
 
 @dataclass
@@ -65,7 +81,7 @@ def load(config_path: Optional[Path] = None) -> Config:
             schedd_host=r["schedd_host"],
             collector_host=r["collector_host"],
             project_dir=r["project_dir"],
-            ssh_key=str(Path(r["ssh_key"]).expanduser()),
+            ssh_key=str(Path(r["ssh_key"]).expanduser()) if r.get("ssh_key") else None,
         ),
         osdf=OsdfConfig(base_path=o["base_path"]),
         local=LocalConfig(

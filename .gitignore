@@ -1,5 +1,6 @@
 .venv
 ospool/__pycache__
+config.toml
 
 execution/job-scripts/*.tar.gz
 execution/job-scripts/analysis

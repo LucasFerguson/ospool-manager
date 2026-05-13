@@ -16,10 +16,6 @@ from pathlib import Path
 from .config import Config
 
 
-def _ssh_opts(cfg: Config) -> list[str]:
-    return ["-i", cfg.remote.ssh_key, "-o", "StrictHostKeyChecking=no", "-o", "IdentitiesOnly=yes"]
-
-
 def _osdf_ssh_path(cfg: Config) -> str:
     """Convert osdf:///ospool/ap40/data/user → /ospool/ap40/data/user."""
     return cfg.osdf.base_path.replace("osdf://", "")
@@ -71,7 +67,7 @@ def retrieve_spool(cfg: Config, cluster_id: int, dest: Optional[Path] = None) ->
     dest.mkdir(parents=True, exist_ok=True)
 
     ssh_target = f"{cfg.remote.username}@{cfg.remote.access_point}"
-    ssh_opts = _ssh_opts(cfg)
+    ssh_opts = cfg.remote.ssh_opts()
     ap_staging = f"{cfg.remote.project_dir}/outputs"
 
     print(f"Recovering spooled output for cluster {cluster_id} from AP spool ...")
@@ -114,7 +110,7 @@ def fetch_outputs(cfg: Config, cluster_id: int, dest: Optional[Path] = None) -> 
     dest.mkdir(parents=True, exist_ok=True)
 
     ssh_target = f"{cfg.remote.username}@{cfg.remote.access_point}"
-    ssh_opts = _ssh_opts(cfg)
+    ssh_opts = cfg.remote.ssh_opts()
 
     ap_home_outputs = f"{cfg.remote.project_dir}/outputs"
     osdf_outputs    = f"{_osdf_ssh_path(cfg)}/outputs"
@@ -202,7 +198,7 @@ def fetch_all(cfg: Config, dest: Optional[Path] = None) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
 
     ssh_target = f"{cfg.remote.username}@{cfg.remote.access_point}"
-    ssh_opts = _ssh_opts(cfg)
+    ssh_opts = cfg.remote.ssh_opts()
     ap_home_outputs = f"{cfg.remote.project_dir}/outputs"
     osdf_outputs    = f"{_osdf_ssh_path(cfg)}/outputs"
 

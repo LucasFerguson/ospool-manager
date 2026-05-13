@@ -57,7 +57,7 @@ def list_dir(cfg: Config, path: Optional[str] = None) -> None:
     """
     target = _osdf_to_ssh(cfg, path)
     ssh_target = f"{cfg.remote.username}@{cfg.remote.access_point}"
-    ssh_opts = ["-i", cfg.remote.ssh_key, "-o", "StrictHostKeyChecking=no", "-o", "IdentitiesOnly=yes"]
+    ssh_opts = cfg.remote.ssh_opts()
 
     console.print(f"[dim]{ssh_target}:{target}/[/dim]\n")
 

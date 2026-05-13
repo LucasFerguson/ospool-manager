@@ -42,12 +42,8 @@ _RSYNC_EXCLUDES = [
 ]
 
 
-def _ssh_opts(cfg: Config) -> list[str]:
-    return ["-i", cfg.remote.ssh_key, "-o", "StrictHostKeyChecking=no"]
-
-
 def _ssh_target(cfg: Config) -> str:
-    return f"{cfg.remote.username}@{cfg.remote.access_point}"
+    return cfg.remote.ssh_target()
 
 
 def setup_remote(cfg: Config) -> None:
@@ -60,7 +56,7 @@ def setup_remote(cfg: Config) -> None:
     )
     cmd = [
         "ssh",
-        *_ssh_opts(cfg),
+        *cfg.remote.ssh_opts(),
         _ssh_target(cfg),
         f"mkdir -p {cfg.remote.project_dir} {dirs}",
     ]
@@ -91,7 +87,7 @@ def sync_remote(cfg: Config, include_data: bool = False) -> None:
         "rsync",
         "-avz",
         "--delete",
-        "-e", f"ssh {' '.join(_ssh_opts(cfg))}",
+        "-e", f"ssh {' '.join(cfg.remote.ssh_opts())}",
         *exclude_args,
         local_root,
         remote_dest,

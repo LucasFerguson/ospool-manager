@@ -469,7 +469,7 @@ def follow_log(
     Ctrl-C to stop.
     """
     ssh_target = f"{cfg.remote.username}@{cfg.remote.access_point}"
-    ssh_opts = ["-i", cfg.remote.ssh_key, "-o", "StrictHostKeyChecking=no"]
+    ssh_opts = cfg.remote.ssh_opts()
     proj = cfg.remote.project_dir
     logs_dir = f"{proj}/logs"
 

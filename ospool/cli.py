@@ -68,7 +68,7 @@ def ssh(
     c = _cfg(config)
     target = f"{c.remote.username}@{c.remote.access_point}"
     typer.echo(f"Connecting to {target} ...")
-    os.execvp("ssh", ["ssh", "-i", c.remote.ssh_key, "-o", "StrictHostKeyChecking=no", target])
+    os.execvp("ssh", ["ssh", *c.remote.ssh_opts(), target])
 
 
 @app.command("token-fetch", rich_help_panel="System & Setup")

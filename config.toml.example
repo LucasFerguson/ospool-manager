@@ -1,0 +1,24 @@
+[remote]
+username       = "your-username"
+access_point   = "ap40.uw.osg-htc.org"
+schedd_host    = "ap40.uw.osg-htc.org"
+collector_host = "cm-1.ospool.osg-htc.org"
+project_dir    = "/home/your-username/ospool-manager"
+
+# Path to your SSH private key for the AP.
+# Leave unset or empty to use ssh-agent / ~/.ssh default keys instead.
+# ssh_key = "~/.ssh/ospool_ed25519"
+
+[osdf]
+base_path = "osdf:///ospool/ap40/data/your-username"
+
+[local]
+project_dir   = "."
+execution_dir = "execution"
+data_dir      = "data"
+logs_dir      = "logs"
+outputs_dir   = "outputs"
+runs_dir      = "runs"
+
+[submit]
+mode = "spool"   # "spool" (works anywhere) or "ap-project" (requires sync first)

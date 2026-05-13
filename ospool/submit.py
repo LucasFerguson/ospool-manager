@@ -32,7 +32,7 @@ def _schedd(cfg: Config) -> htcondor.Schedd:
 
 def _verify_remote_dirs(cfg: Config) -> None:
     """SSH check that the remote project_dir exists. Raises RuntimeError if not."""
-    ssh_opts = ["-i", cfg.remote.ssh_key, "-o", "StrictHostKeyChecking=no"]
+    ssh_opts = cfg.remote.ssh_opts()
     target = f"{cfg.remote.username}@{cfg.remote.access_point}"
     result = subprocess.run(
         ["ssh", *ssh_opts, target, f"test -d {cfg.remote.project_dir}"],

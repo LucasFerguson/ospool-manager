@@ -45,7 +45,7 @@ def upload(cfg: Config, source: Optional[Path] = None) -> str:
 
     remote_path = _osdf_ssh_path(cfg)
     ssh_target = f"{cfg.remote.username}@{cfg.remote.access_point}"
-    ssh_opts = ["-i", cfg.remote.ssh_key, "-o", "StrictHostKeyChecking=no", "-o", "IdentitiesOnly=yes"]
+    ssh_opts = cfg.remote.ssh_opts()
 
     print(f"Ensuring remote OSDF directory exists: {ssh_target}:{remote_path}/")
     subprocess.run(
